@@ -119,9 +119,51 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      # 四个平台全绿才公开，避免出现「Release 里只有 macOS 包」的情况。
+      # 四个平台全绿才公开，避免出现「Release 里只有一半平台」的情况。
+      #
+      # 这里直接打 REST API 而不用 `gh release edit`：后者失败时只吐一句
+      # "exit code 1"，连错在哪都看不到（v1.0.0 首发就踩了一次）。curl 带上
+      # HTTP 状态码与响应体，下次真出问题能从日志一眼看出是权限问题还是网络抖动。
       - name: 将草稿转为正式发布
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ env.RELEASE_TAG }}
-        run: gh release edit "$TAG" --draft=false
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api=https://api.github.com
+          auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json")
+
+          # api.github.com 偶发连不上（首发时 macOS arm64 runner 上出现过
+          # 10s 连接超时），显式重试而不是让整个 job 挂掉。
+          id=""
+          for attempt in 1 2 3; do
+            if id=$(curl -sSf "${auth[@]}" "$api/repos/$REPO/releases/tags/$TAG" \
+                    | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' 2>/dev/null); then
+              break
+            fi
+            id=""
+            echo "attempt $attempt: 读取 release 失败，重试中…"
+            sleep $((attempt * 5))
+          done
+          if [ -z "$id" ]; then
+            echo "::error::取不到 release id，检查 tag $TAG 是否已创建 Release"
+            exit 1
+          fi
+          echo "release id=$id"
+
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /tmp/release.json -w '%{http_code}' -X PATCH \
+                   "${auth[@]}" "$api/repos/$REPO/releases/$id" \
+                   -d '{"draft":false}' || true)
+            if [ "$code" = "200" ]; then
+              python3 -c 'import json; d=json.load(open("/tmp/release.json")); print("published:", d["html_url"])'
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            head -c 500 /tmp/release.json 2>/dev/null || true
+            echo
+            sleep $((attempt * 5))
+          done
+          echo "::error::发布失败，请手动检查该 Release 的草稿状态"
+          exit 1
