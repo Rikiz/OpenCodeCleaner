@@ -196,7 +196,18 @@ pub fn ensure_app_dirs() -> Result<()> {
 /// Best-effort free disk space at a path (bytes). Returns 0 on failure (caller
 /// then skips the pre-clean disk-space guard, which is non-critical).
 pub fn free_space(p: &Path) -> u64 {
-    free_space_impl(p)
+    // GetDiskFreeSpaceExW (and `df`) both fail on a path that does not exist
+    // yet — which is exactly the case for a migration target the wizard has not
+    // created yet. Walk up to the nearest existing ancestor so the query still
+    // answers for the right volume instead of silently returning 0.
+    let mut probe = p;
+    while !probe.as_os_str().is_empty() && !probe.exists() {
+        match probe.parent() {
+            Some(parent) => probe = parent,
+            None => return 0,
+        }
+    }
+    free_space_impl(probe)
 }
 
 #[cfg(unix)]

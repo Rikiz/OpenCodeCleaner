@@ -522,15 +522,30 @@ fn t19_relocate_verify_and_undo_roundtrip() {
     assert!(report.pending_backup_bytes > 0, "old copy must be kept");
     assert_eq!(report.pending_backup_paths.len(), 2);
 
-    // the link path opencode uses must now resolve into the target
+    // the link path opencode uses must now resolve into the target.
+    // Compare canonically, NOT as raw strings: Windows runners hand out an 8.3
+    // short temp path (C:\Users\RUNNER~1\...) while canonicalize expands it to the
+    // long name, and canonicalize also emits a \\?\ verbatim prefix.
+    let canon = |p: &str| -> String {
+        let c = std::fs::canonicalize(p)
+            .unwrap_or_else(|e| panic!("canonicalize({p}) failed: {e}"));
+        let s = c.to_string_lossy().to_string();
+        let s = s.strip_prefix(r"\\?\").unwrap_or(&s).to_lowercase();
+        s.trim_end_matches('\\').replace('/', "\\")
+    };
     let st = lib::migrate::status();
     assert!(st.data_relocated);
     assert!(st.cache_relocated);
-    assert!(
+    assert_eq!(
+        canon(&st.data_root),
+        canon(&target_base.join("data").join("opencode").to_string_lossy()),
+        "data root should resolve into the migration target: {}",
         st.data_real_path
-            .starts_with(target_base.to_string_lossy().as_ref()),
-        "unexpected real path: {}",
-        st.data_real_path
+    );
+    assert_eq!(
+        canon(&st.cache_root),
+        canon(&target_base.join("cache").join("opencode").to_string_lossy()),
+        "cache root should resolve into the migration target"
     );
     // no \\?\ verbatim prefix leaking into the UI-facing string
     assert!(!st.data_real_path.starts_with(r"\\?\"));
