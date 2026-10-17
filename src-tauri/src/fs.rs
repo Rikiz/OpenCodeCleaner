@@ -52,11 +52,67 @@ pub fn file_size(path: &Path) -> u64 {
     fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-pub fn remove_dir_all(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path)?;
+/// Recursive delete that tolerates individual locked entries and reports what
+/// it actually removed.
+///
+/// `fs::remove_dir_all` aborts the whole subtree on the first failure, which on
+/// Windows means one file held open by a running process leaves *everything*
+/// behind (on Unix the rest still goes). We therefore remove files first
+/// (one by one) and then directories deepest-first, collecting failures rather
+/// than propagating them.
+///
+/// Returns `(bytes actually freed, paths that could not be removed)`.
+pub fn remove_dir_all_counted(path: &Path) -> (u64, Vec<String>) {
+    let mut freed = 0u64;
+    let mut failed = Vec::new();
+    if !path.exists() {
+        return (freed, failed);
     }
-    Ok(())
+    let mut dirs = Vec::new();
+    collect_removal_plan(path, &mut dirs);
+    // dirs is pre-order (parents before children); iterate reversed so children
+    // are removed before their parents.
+    for p in dirs.iter().rev() {
+        let Ok(meta) = fs::symlink_metadata(p) else {
+            continue;
+        };
+        if meta.is_dir() {
+            if let Err(e) = fs::remove_dir(p) {
+                // A non-empty directory here means some child was locked.
+                failed.push(format!("{} ({e})", p.display()));
+            }
+        } else {
+            // Everything that is not a real directory — regular files, symlinks
+            // (cache/bin entries often are), fifos — is unlinked individually.
+            match fs::remove_file(p) {
+                Ok(()) => freed += meta.len(),
+                Err(e) => failed.push(format!("{} ({e})", p.display())),
+            }
+        }
+    }
+    (freed, failed)
+}
+
+fn collect_removal_plan(dir: &Path, out: &mut Vec<PathBuf>) {
+    out.push(dir.to_path_buf());
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut children: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+    children.sort();
+    for child in children {
+        // symlink_metadata: never follow links. A symlinked directory must be
+        // unlinked itself, not descended into, or we would delete files outside
+        // the tree the user selected.
+        let Ok(meta) = fs::symlink_metadata(&child) else {
+            continue;
+        };
+        if meta.is_dir() {
+            collect_removal_plan(&child, out);
+        } else {
+            out.push(child);
+        }
+    }
 }
 
 /// Remove files matching a glob-style prefix+"suffix" within `dir`.
@@ -77,11 +133,9 @@ pub fn remove_glob(dir: &Path, pattern: &str) -> Result<u64> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with(prefix) && name.ends_with(suffix) && name.len() >= prefix.len() + suffix.len()
-        {
-            if fs::remove_file(entry.path()).is_ok() {
+            && fs::remove_file(entry.path()).is_ok() {
                 removed += 1;
             }
-        }
     }
     Ok(removed)
 }

@@ -140,7 +140,7 @@ pub struct CleanResult {
     pub duration_ms: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone)]
 pub struct CleanError {
     pub item: String,
     pub message: String,
@@ -186,4 +186,62 @@ impl Default for AppSettings {
             theme: "dark".to_string(),
         }
     }
+}
+
+// ============ Storage / relocation (ADR-010) ============
+
+#[derive(Serialize, Clone, Debug)]
+pub struct StorageStatus {
+    pub platform: String,
+    /// Relocation wizard is available (Windows only).
+    pub supported: bool,
+    pub data_root: String,
+    pub cache_root: String,
+    /// Where the root actually lives once junctions are resolved.
+    pub data_real_path: String,
+    pub cache_real_path: String,
+    pub data_relocated: bool,
+    pub cache_relocated: bool,
+    pub data_bytes: u64,
+    pub cache_bytes: u64,
+    /// Bytes still sitting on the old volume awaiting explicit deletion.
+    pub pending_backup_bytes: u64,
+    pub pending_backup_paths: Vec<String>,
+    /// Runtime state stays on the system volume; surfaced so it is not a surprise.
+    pub state_dir: String,
+    pub opencode_running: bool,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Preflight {
+    pub ok: bool,
+    pub blockers: Vec<String>,
+    pub warnings: Vec<String>,
+    pub data_bytes: u64,
+    pub cache_bytes: u64,
+    pub free_bytes: u64,
+    pub junction_supported: bool,
+    pub data_relocated: bool,
+    pub cache_relocated: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MigrationItem {
+    pub key: String,
+    pub label: String,
+    /// The path opencode keeps using; this is the junction itself.
+    pub link_path: String,
+    pub target_path: String,
+    pub copied_bytes: u64,
+    pub files: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MigrationReport {
+    pub items: Vec<MigrationItem>,
+    /// Left on the old volume on purpose; freed only by discard_backup().
+    pub pending_backup_bytes: u64,
+    pub pending_backup_paths: Vec<String>,
+    pub warnings: Vec<String>,
+    pub duration_ms: u64,
 }

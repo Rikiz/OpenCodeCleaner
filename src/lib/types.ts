@@ -105,3 +105,49 @@ export interface AppSettings {
 }
 
 export type View = "dashboard" | "sessions" | "directories" | "backups" | "settings";
+
+export interface StorageStatus {
+  platform: string;
+  supported: boolean;
+  data_root: string;
+  cache_root: string;
+  data_real_path: string;
+  cache_real_path: string;
+  data_relocated: boolean;
+  cache_relocated: boolean;
+  data_bytes: number;
+  cache_bytes: number;
+  pending_backup_bytes: number;
+  pending_backup_paths: string[];
+  state_dir: string;
+  opencode_running: boolean;
+}
+
+export interface Preflight {
+  ok: boolean;
+  blockers: string[];
+  warnings: string[];
+  data_bytes: number;
+  cache_bytes: number;
+  free_bytes: number;
+  junction_supported: boolean;
+  data_relocated: boolean;
+  cache_relocated: boolean;
+}
+
+export interface MigrationItem {
+  key: string;
+  label: string;
+  link_path: string;
+  target_path: string;
+  copied_bytes: number;
+  files: number;
+}
+
+export interface MigrationReport {
+  items: MigrationItem[];
+  pending_backup_bytes: number;
+  pending_backup_paths: string[];
+  warnings: string[];
+  duration_ms: number;
+}

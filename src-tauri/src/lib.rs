@@ -4,6 +4,7 @@ pub mod commands;
 pub mod db;
 pub mod error;
 pub mod fs;
+pub mod migrate;
 pub mod paths;
 pub mod process;
 pub mod scan;
@@ -38,6 +39,11 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::get_data_root,
+            commands::storage_info,
+            commands::migrate_preflight,
+            commands::migrate_execute,
+            commands::migrate_undo,
+            commands::migrate_discard_backup,
             commands::export_diagnostics,
         ])
         .setup(|_app| {

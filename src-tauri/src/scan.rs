@@ -74,9 +74,7 @@ where
     let opencode_version;
     let mut sessions: Vec<SessionUsage> = match db::open_readonly(paths) {
         Ok(conn) => {
-            if let Err(e) = db::ensure_tables_exist(&conn) {
-                return Err(e);
-            }
+            db::ensure_tables_exist(&conn)?;
             opencode_version = db::detect_opencode_version();
             db::scan_sessions(&conn)?
         }

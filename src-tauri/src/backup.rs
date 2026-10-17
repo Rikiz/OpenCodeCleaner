@@ -114,7 +114,7 @@ pub fn list() -> Result<Vec<BackupInfo>> {
         };
         out.push(info);
     }
-    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    out.sort_by_key(|b| std::cmp::Reverse(b.created_at));
     Ok(out)
 }
 
@@ -176,11 +176,16 @@ pub fn restore(paths: &DataPaths, id: &str) -> Result<()> {
         if st.running {
             return Err(CleanerError::ProcessRunning(st.processes));
         }
-        fs::copy(&db_backup, &paths.db_path)?;
-        // remove stale wal/shm
+        restore_db(&db_backup, &paths.db_path)?;
+
+        // Drop stale wal/shm *after* the swap: they belong to the replaced DB.
         for ext in ["-wal", "-shm"] {
             let p = format!("{}{ext}", paths.db_path.to_string_lossy());
-            let _ = fs::remove_file(&p);
+            if let Err(e) = fs::remove_file(&p) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!("restore: could not remove {p}: {e}");
+                }
+            }
         }
     }
 
@@ -208,6 +213,46 @@ pub fn restore(paths: &DataPaths, id: &str) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Swap `dst` with `src` without ever leaving a half-written database behind.
+///
+/// Windows enforces mandatory sharing: `fs::copy` straight onto `dst` fails
+/// with ERROR_SHARING_VIOLATION if anything still holds the file open, and a
+/// partial overwrite corrupts the DB. So we stage into a sibling temp file,
+/// only then remove the original and rename into place. A failing remove (file
+/// still locked by opencode) leaves the original untouched and reports why.
+fn restore_db(src: &Path, dst: &Path) -> Result<()> {
+    let staging = dst.with_file_name(format!(
+        "{}.restore-tmp",
+        dst.file_name().and_then(|n| n.to_str()).unwrap_or("opencode.db")
+    ));
+    let _ = fs::remove_file(&staging);
+
+    if let Err(e) = fs::copy(src, &staging) {
+        let _ = fs::remove_file(&staging);
+        return Err(CleanerError::RestoreFailed(format!(
+            "could not stage database copy: {e}"
+        )));
+    }
+
+    if dst.exists() {
+        if let Err(e) = fs::remove_file(dst) {
+            let _ = fs::remove_file(&staging);
+            return Err(CleanerError::RestoreFailed(format!(
+                "{} is in use (is opencode running?): {e}",
+                dst.display()
+            )));
+        }
+    }
+
+    if let Err(e) = fs::rename(&staging, dst) {
+        let _ = fs::remove_file(&staging);
+        return Err(CleanerError::RestoreFailed(format!(
+            "could not install restored database: {e}"
+        )));
+    }
     Ok(())
 }
 

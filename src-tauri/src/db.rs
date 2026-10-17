@@ -201,7 +201,7 @@ pub fn page_size(conn: &Connection) -> Result<u64> {
 
 /// WAL checkpoint before backup so the main db file is current.
 pub fn checkpoint(conn: &Connection) -> Result<()> {
-    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
         let _: i64 = r.get(0)?;
         Ok::<_, rusqlite::Error>(())
     })?;
@@ -222,17 +222,67 @@ pub fn opencode_version(_conn: &Connection) -> Option<String> {
     None
 }
 
-/// Detect opencode version by checking the installed CLI via PATH.
+/// Detect opencode version by invoking the installed CLI.
+///
+/// On Windows `Command::new("opencode")` only resolves `.exe`, while the npm /
+/// bun installers drop a `opencode.cmd` (and often `.ps1`) shim on PATH. So we
+/// scan PATH ourselves and, for script shims, go through `cmd /C`.
 pub fn detect_opencode_version() -> Option<String> {
-    let out = std::process::Command::new("opencode")
-        .arg("--version")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    for (candidate, via_shell) in cli_candidates() {
+        let output = if via_shell {
+            std::process::Command::new("cmd")
+                .args(["/C", &candidate, "--version"])
+                .output()
+        } else {
+            std::process::Command::new(&candidate).arg("--version").output()
+        };
+        let Ok(out) = output else { continue };
+        if !out.status.success() {
+            continue;
+        }
+        let s = String::from_utf8_lossy(&out.stdout);
+        let v = s.trim();
+        if !v.is_empty() {
+            return Some(v.to_string());
+        }
     }
-    let s = String::from_utf8_lossy(&out.stdout);
-    Some(s.trim().to_string())
+    None
+}
+
+/// Resolve an `opencode` executable on PATH, returning (path, needs_shell).
+fn cli_candidates() -> Vec<(String, bool)> {
+    #[cfg(windows)]
+    let names = ["opencode.exe", "opencode.cmd", "opencode.bat", "opencode"];
+    #[cfg(not(windows))]
+    let names = ["opencode"];
+
+    let Some(path) = std::env::var_os("PATH") else {
+        // No PATH to scan: fall back to relying on the OS search path, which
+        // works on Unix and for `.exe` on Windows.
+        return names
+            .iter()
+            .map(|n| (n.to_string(), cfg!(windows) && !n.ends_with(".exe")))
+            .collect();
+    };
+
+    let mut out = Vec::new();
+    for dir in std::env::split_paths(&path) {
+        for name in names {
+            let p = dir.join(name);
+            if p.is_file() {
+                let via_shell = cfg!(windows) && !name.ends_with(".exe");
+                out.push((p.to_string_lossy().into_owned(), via_shell));
+            }
+        }
+    }
+    if out.is_empty() {
+        out.extend(
+            names
+                .iter()
+                .map(|n| (n.to_string(), cfg!(windows) && !n.ends_with(".exe"))),
+        );
+    }
+    out
 }
 
 /// Probe whether DB is safe-ish to operate: required tables exist.

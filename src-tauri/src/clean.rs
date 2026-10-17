@@ -36,7 +36,7 @@ pub fn resolve_sessions(
 
     if let Some(n) = sel.keep_recent {
         // keep most recently active n, select the rest
-        sessions.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active));
         if (n as usize) < sessions.len() {
             sessions = sessions.split_off(n as usize);
         } else {
@@ -210,15 +210,14 @@ where
 
     // phase: delete DB sessions
     let mut freed = 0u64;
+    let mut vacuum_reclaimed = 0u64;
     if needs_db {
         on_progress(ExecuteProgress::phase("deleting", 0, sessions.len()));
         match db::open_readwrite(paths) {
             Ok(mut conn) => {
                 let tx = conn.transaction()?;
                 let ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
-                if let Err(e) = db::delete_sessions(&tx, &ids) {
-                    return Err(e);
-                }
+                db::delete_sessions(&tx, &ids)?;
                 tx.commit()?;
                 freed += sessions.iter().map(|s| s.size_bytes).sum::<u64>();
                 on_progress(ExecuteProgress::phase("deleting", sessions.len(), sessions.len()));
@@ -226,14 +225,20 @@ where
                 // remove session diff files
                 for s in &sessions {
                     let p = paths.session_diff_path(&s.id);
-                    if p.exists() {
-                        let _ = std::fs::remove_file(&p);
+                    if let Ok(meta) = std::fs::symlink_metadata(&p) {
+                        match std::fs::remove_file(&p) {
+                            Ok(()) => freed += meta.len(),
+                            Err(e) => errors.push(CleanError {
+                                item: format!("session_diff/{}", s.id),
+                                message: e.to_string(),
+                            }),
+                        }
                     }
                 }
 
                 // vacuum
                 on_progress(ExecuteProgress::phase("vacuum", 0, 1));
-                let _reclaimed = db::vacuum(&mut conn, paths).unwrap_or(0);
+                vacuum_reclaimed = db::vacuum(&mut conn, paths).unwrap_or(0);
                 on_progress(ExecuteProgress::phase("vacuum", 1, 1));
             }
             Err(e) => {
@@ -250,22 +255,38 @@ where
     for (i, key) in sel.directories.iter().enumerate() {
         on_progress(ExecuteProgress::phase("files", i, dir_count));
         let path = dir_for_key(paths, *key);
-        if path.exists() {
-            let stat = dfs::dir_stat(&path);
-            if *key == DirKeySel::CacheModels {
-                let _ = std::fs::remove_file(&path);
-            } else if *key == DirKeySel::SessionDiff {
-                // only remove diff files for deleted sessions already handled above;
-                // for "all session diffs" we remove the whole dir contents
-                let _ = dfs::remove_dir_all(&path);
-                let _ = std::fs::create_dir_all(&path);
-            } else {
-                let _ = dfs::remove_dir_all(&path);
-                if *key == DirKeySel::Log || *key == DirKeySel::ToolOutput || *key == DirKeySel::Repos {
-                    let _ = std::fs::create_dir_all(&path);
-                }
+        if !path.exists() {
+            continue;
+        }
+        let item = key.label().to_string();
+        if *key == DirKeySel::CacheModels {
+            let sz = dfs::file_size(&path);
+            match std::fs::remove_file(&path) {
+                Ok(()) => freed += sz,
+                Err(e) => errors.push(CleanError {
+                    item,
+                    message: e.to_string(),
+                }),
             }
-            freed += stat.size_bytes;
+        } else {
+            let (removed, failed) = dfs::remove_dir_all_counted(&path);
+            freed += removed;
+            for f in failed {
+                errors.push(CleanError {
+                    item: item.clone(),
+                    message: f,
+                });
+            }
+            // Recreate the directories opencode expects to exist; for
+            // session_diff/log/tool-output/repos an empty dir is valid, the
+            // rest stay absent until opencode writes into them.
+            if *key == DirKeySel::SessionDiff
+                || *key == DirKeySel::Log
+                || *key == DirKeySel::ToolOutput
+                || *key == DirKeySel::Repos
+            {
+                let _ = std::fs::create_dir_all(&path);
+            }
         }
     }
     on_progress(ExecuteProgress::phase("files", dir_count, dir_count));
@@ -275,7 +296,7 @@ where
         freed_mb: scan::bytes_to_mb(freed),
         backup_path,
         errors,
-        vacuum_reclaimed_bytes: 0,
+        vacuum_reclaimed_bytes: vacuum_reclaimed,
         duration_ms: start.elapsed().as_millis() as u64,
     })
 }

@@ -227,6 +227,43 @@ export function CleanWizard({
               <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
                 已回收 · 用时 {(result.duration_ms / 1000).toFixed(1)}s
               </div>
+              {result.errors.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    textAlign: "left",
+                    background: "rgba(251, 191, 36, 0.08)",
+                    border: "1px solid rgba(251, 191, 36, 0.25)",
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "var(--warn)" }}>
+                    {result.errors.length} 项未能清理
+                  </div>
+                  <ul
+                    style={{
+                      margin: "6px 0 0",
+                      paddingLeft: 18,
+                      fontSize: 11,
+                      lineHeight: 1.5,
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    {result.errors.slice(0, 8).map((e, i) => (
+                      <li key={i}>
+                        <span className="mono">{e.item}</span>: {e.message}
+                      </li>
+                    ))}
+                    {result.errors.length > 8 && (
+                      <li className="dim">…其余 {result.errors.length - 8} 项省略</li>
+                    )}
+                  </ul>
+                  <div className="dim" style={{ fontSize: 11, marginTop: 6 }}>
+                    常见原因：opencode 仍在运行并占用文件（Windows 下会锁定句柄）。
+                  </div>
+                </div>
+              )}
               {result.backup_path && (
                 <div className="dim mono" style={{ marginTop: 16, fontSize: 11, wordBreak: "break-all" }}>
                   已备份至 {result.backup_path}

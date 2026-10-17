@@ -16,7 +16,7 @@ pub fn check() -> ProcessStatus {
     let mut found = Vec::new();
     let my_pid = std::process::id();
 
-    for (_, proc_) in sys.processes() {
+    for proc_ in sys.processes().values() {
         if proc_.pid().as_u32() == my_pid {
             continue;
         }
@@ -30,11 +30,10 @@ pub fn check() -> ProcessStatus {
             .unwrap_or_default();
 
         for t in targets {
-            if name == t || exe_name == t {
-                if !found.contains(&t.to_string()) {
+            if (name == t || exe_name == t)
+                && !found.contains(&t.to_string()) {
                     found.push(t.to_string());
                 }
-            }
         }
     }
 

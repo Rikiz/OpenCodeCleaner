@@ -5,9 +5,10 @@ use crate::paths::{self, DataPaths};
 use crate::scan;
 use crate::settings;
 use crate::types::{
-    AppSettings, BackupInfo, CleanError, CleanPreview, CleanResult, CleanSelection, ProcessStatus,
-    ScanReport,
+    AppSettings, BackupInfo, CleanError, CleanPreview, CleanResult, CleanSelection, MigrationReport,
+    Preflight, ProcessStatus, ScanReport, StorageStatus,
 };
+use std::path::Path;
 use std::sync::Mutex as StdMutex;
 use tauri::{AppHandle, Emitter, State};
 
@@ -138,9 +139,9 @@ pub async fn delete_backup(backup_id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub async fn get_settings() -> CmdResult<AppSettings> {
-    Ok(tokio::task::spawn_blocking(settings::load)
+    tokio::task::spawn_blocking(settings::load)
         .await
-        .map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -155,6 +156,67 @@ pub async fn set_settings(settings: AppSettings) -> CmdResult<AppSettings> {
 pub async fn get_data_root() -> CmdResult<String> {
     let p = resolve_paths()?;
     Ok(p.data_root.to_string_lossy().to_string())
+}
+
+/// Everything the Settings page needs to describe storage in one round trip:
+/// where opencode's data lives, whether a junction has already redirected it,
+/// and how much of the old volume is still waiting to be freed.
+#[tauri::command]
+pub async fn storage_info() -> CmdResult<StorageStatus> {
+    tokio::task::spawn_blocking(crate::migrate::status)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn migrate_preflight(target_base: String) -> CmdResult<Preflight> {
+    tokio::task::spawn_blocking(move || crate::migrate::preflight(Path::new(&target_base)))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(estr)
+}
+
+#[tauri::command]
+pub async fn migrate_execute(
+    app: AppHandle,
+    target_base: String,
+) -> CmdResult<MigrationReport> {
+    tokio::task::spawn_blocking(move || {
+        crate::migrate::execute(Path::new(&target_base), &mut |p| {
+            let _ = app.emit(
+                "migrate-progress",
+                serde_json::json!({
+                    "phase": p.phase,
+                    "item": p.item,
+                    "current": p.current,
+                    "total": p.total,
+                    "bytes": p.bytes,
+                }),
+            );
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(estr)
+}
+
+#[tauri::command]
+pub async fn migrate_undo() -> CmdResult<Vec<String>> {
+    tokio::task::spawn_blocking(crate::migrate::undo)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(estr)
+}
+
+/// Irreversible: frees space on the old volume by deleting the copies kept
+/// during migration. Kept as a separate command so it can never be reached by
+/// the migration path itself.
+#[tauri::command]
+pub async fn migrate_discard_backup() -> CmdResult<Vec<String>> {
+    tokio::task::spawn_blocking(crate::migrate::discard_backup)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(estr)
 }
 
 #[tauri::command]

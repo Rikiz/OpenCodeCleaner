@@ -6,8 +6,11 @@ import type {
   CleanPreview,
   CleanResult,
   CleanSelection,
+  MigrationReport,
+  Preflight,
   ProcessStatus,
   ScanReport,
+  StorageStatus,
 } from "./types";
 
 export const api = {
@@ -22,6 +25,13 @@ export const api = {
   setSettings: (settings: AppSettings) => invoke<AppSettings>("set_settings", { settings }),
   getDataRoot: () => invoke<string>("get_data_root"),
   exportDiagnostics: () => invoke<string>("export_diagnostics"),
+  storageInfo: () => invoke<StorageStatus>("storage_info"),
+  migratePreflight: (targetBase: string) =>
+    invoke<Preflight>("migrate_preflight", { targetBase }),
+  migrateExecute: (targetBase: string) =>
+    invoke<MigrationReport>("migrate_execute", { targetBase }),
+  migrateUndo: () => invoke<string[]>("migrate_undo"),
+  migrateDiscardBackup: () => invoke<string[]>("migrate_discard_backup"),
 };
 
 export interface ScanProgress {
@@ -46,4 +56,18 @@ export async function onCleanProgress(cb: (p: CleanProgress) => void): Promise<U
 
 export async function onRestoreDone(cb: () => void): Promise<UnlistenFn> {
   return listen("restore-done", () => cb());
+}
+
+export interface MigrateProgress {
+  phase: string;
+  item: string;
+  current: number;
+  total: number;
+  bytes: number;
+}
+
+export async function onMigrateProgress(
+  cb: (p: MigrateProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<MigrateProgress>("migrate-progress", (e) => cb(e.payload));
 }

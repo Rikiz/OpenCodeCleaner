@@ -35,7 +35,8 @@ opencode 重度用户：日均多次交互、多项目并行，使用 macOS 或 
 - 不做 Part 级细粒度删减（如仅删 webfetch HTML、保留对话文本）——列为 v2
 - 不做自动定期清理（计划任务）——列为 v2
 - 不修改 opencode 自身代码或配置
-- 不提供 Linux 安装包（路径逻辑兼容，后续可加）
+- 不提供 Linux 安装包（路径逻辑与引擎完全兼容，AppImage/deb 打包列为 v1.1）
+- 不做跨机同步 / 多盘数据分布（仅支持把数据整体搬到另一个本地卷）
 - 不清理 `auth.json`/`account`/`credential` 等凭证（涉密且价值低）
 - 不做会话导出/迁移（opencode 已有 `export`/`import` 命令）
 
@@ -170,6 +171,14 @@ opencode 重度用户：日均多次交互、多项目并行，使用 macOS 或 
 | --------------- | ----------------- | --------------- | -------------- |
 | macOS           | 12 Monterey+      | arm64, x86_64   | system WebView |
 | Windows         | 10 1809+ / 11     | x86_64          | WebView2 (Edge)|
+| Linux           | glibc 2.31+（含 webkit2gtk-4.1 的发行版，如 Debian 12 / Ubuntu 22.04 / Fedora 39） | x86_64, aarch64 | system WebKitGTK |
+
+三平台共用同一份引擎代码，差异仅在：`paths::free_space` 的实现（Win `GetDiskFreeSpaceExW` / Unix `df -k`）、
+`db::detect_opencode_version` 的可执行名解析（Windows 需处理 `.exe`/`.cmd`/`.bat` shim）、
+以及 `main.rs` 的 `windows_subsystem = "windows"`（避免 release 版弹出控制台）。
+Linux 无官方安装包，但 `npx tauri build --no-bundle` 可直接产出可执行文件，CI 亦覆盖其编译。
+
+Windows 另提供**数据迁移**能力：把 opencode 数据整体搬到其它本地卷，原路径留 NTFS 目录联接（ADR-010）。
 
 ## 12. Versioning & Compatibility
 
@@ -188,9 +197,16 @@ opencode 重度用户：日均多次交互、多项目并行，使用 macOS 或 
 | 备份占满磁盘                            | 中       | 保留最近 5 份；备份前检查可用空间（需 < 备份大小 ×1.5）  |
 | 误删正在进行的会话                      | 高       | 默认锁定最近 24h 会话不可选；二次确认                    |
 | WebView2 在精简版 Windows 缺失          | 低       | 安装器内置 WebView2 引导                                |
+| Windows 强文件锁导致整棵目录删不掉      | 高       | 逐文件删除 + 如实记账 `freed_bytes`；失败项进 `errors` 并在 UI 展示（ADR-008） |
+| 数据在非系统盘导致空间预检误判          | 中       | 按路径所在卷查询空闲空间（`GetDiskFreeSpaceExW`）        |
+| 覆盖 DB 失败致 opencode.db 损坏         | 高       | 暂存 `.restore-tmp` 后 rename 换入，失败保留原文件       |
+| 跨卷迁移中途失败留下不一致副本         | 高       | 复制→校验（文件数/字节/会话数）→才切换；切换失败自动回滚；原目录永不自动删（ADR-010） |
+| 目标卷不支持 NTFS 联接（如 exFAT）      | 中       | 预检阶段实测建联接并给出明确拒绝原因，不进入复制阶段   |
 
 ## 14. Dependencies
 
 - `opencode` CLI ≥ 1.17（可选：`session list/delete` 作为兜底）
 - 系统文件系统读写权限（用户级）
 - Windows: WebView2 Runtime（Win11 自带，Win10 需引导安装）
+- Windows: Visual Studio Build Tools（`rusqlite` bundled 需 C 编译器）
+- Linux: webkit2gtk-4.1 等 Tauri 构建依赖（见 README 前置表）

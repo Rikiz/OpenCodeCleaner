@@ -109,11 +109,12 @@ pub enum CleanCategory {
 
 #[derive(Serialize)]
 pub struct CleanResult {
-    pub freed_bytes: u64,
+    pub freed_bytes: u64,        // 实际回收字节：目录按实际删除的文件大小累计，
+                                 // 会话按 DB 中 part 文本长度计（内容口径）
     pub freed_mb: f64,
     pub backup_path: Option<String>,
-    pub errors: Vec<CleanError>,
-    pub vacuum_reclaimed_bytes: u64,
+    pub errors: Vec<CleanError>, // 部分失败条目（item = 目录 key 或 "database"）
+    pub vacuum_reclaimed_bytes: u64, // VACUUM 前后 DB 文件字节差
     pub duration_ms: u64,
 }
 
@@ -368,11 +369,24 @@ fn resolve_paths() -> Result<DataPaths>;
 // data  = env::XDG_DATA_HOME || ~/.local/share  → join "opencode"
 // cache = env::XDG_CACHE_HOME || ~/.cache       → join "opencode"
 // 探测 data_root/opencode.db 存在；缺失 → Err(DataDirNotFound)
+//
+// !!! 平台一致性：以上规则在 macOS / Windows / Linux 上完全相同。
+// opencode 自身并未对 Windows 做 AppData 特判——它在 Windows 上同样读取
+// XDG_DATA_HOME，未设置时回落到 %USERPROFILE%\.local\share\opencode。
+// 因此 Windows 下 data_root = C:\Users\<user>\.local\share\opencode，
+// **不是** %APPDATA% 或 %LOCALAPPDATA%。切勿按「Windows 惯例」改写此处。
 
 fn dir_usage(path: &Path) -> Result<DirUsage>;             // 递归 du + count
-fn remove_dir_all(path: &Path) -> Result<()>;              // 快照/缓存整目录
+fn remove_dir_all_counted(path: &Path) -> (u64, Vec<String>); // 快照/缓存整目录
+// 返回 (实际删除字节, 失败条目)。逐文件删除、失败不中断、如实记账：
+// Windows 强制文件锁下单个被占用文件会让 fs::remove_dir_all 整棵失败，
+// 此处则保留其余可删文件并把失败项上报（见 CleanResult.errors）。
 fn remove_glob(path: &Path, pattern: &str) -> Result<u64>; // session_diff/ses_*.json，返回删除数
 fn archive_dir(src: &Path, dst: &Path) -> Result<u64>;     // tar.gz，返回大小
+
+fn free_space(path: &Path) -> u64;                          // 按路径所在卷，失败返回 0
+// Windows: GetDiskFreeSpaceExW；Unix: df -k <path>
+// 调用方在返回 0 时跳过空间预检（该预检非关键路径）。
 
 // 会话 diff 路径
 fn session_diff_path(root: &Path, sid: &str) -> PathBuf;
@@ -383,6 +397,51 @@ fn snapshot_dir(root: &Path, project_id: &str) -> PathBuf;
 // root/snapshot/{project_id}/   ← 含多个 worktree hash 子目录
 // 清理粒度：整个 project_id 目录（跨会话共享，不支持按会话删）
 ```
+
+---
+
+## 6.1 Relocation Contract (Windows only, ADR-010)
+
+```rust
+// migrate.rs
+
+struct StorageStatus {
+    platform, supported, data_root, cache_root,
+    data_real_path, cache_real_path,      // 解析联接后的真实位置（剥掉 \\?\ 前缀）
+    data_relocated, cache_relocated,      // 该路径自身带 FILE_ATTRIBUTE_REPARSE_POINT
+    data_bytes, cache_bytes,
+    pending_backup_bytes, pending_backup_paths,  // 旧卷上待手动删除的副本
+    state_dir, opencode_running,
+}
+
+fn status() -> StorageStatus;                    // 三平台通用；非 Windows 时 supported=false
+fn preflight(target_base: &Path) -> Preflight;  // ok / blockers / warnings / free_bytes / junction_supported
+fn execute(target_base: &Path, on_progress) -> MigrationReport;  // windows
+fn undo() -> Vec<String>;                       // 撤销：摘联接 + 旧副本换回
+fn discard_backup() -> Vec<String>;             // 删除旧副本（不可撤销，独立命令）
+```
+
+契约要点：
+
+- **不改环境变量、不改 opencode 路径**。原路径变为 NTFS 目录联接（`mklink /J`），
+  所有解析旧路径的消费者自动落到新卷。
+- **迁移范围**：`data`（会话/日志/快照/tool-output）+ `cache`（模型包/二进制）。
+  `state` 不迁移。
+- **布局**：`<target_base>/data/opencode` 与 `<target_base>/cache/opencode`。
+- **切换前硬门禁**：源/目标文件数一致、字节数一致、目标 DB 可打开且
+  `session_count` 与源相同；任一不符 → 中止，不切换。
+- **失败语义**：建联接失败 → 原目录自动 rename 回原位并返回错误；
+  绝不出现「原目录已移走且联接没建成」的状态。
+- **旧副本**：`<root>.migrated-backup-<ts>`，迁移流程永不删除；
+  系统盘空间只由 `discard_backup()` 释放。
+- **重复迁移**：preflight 检测到已有联接或遗留旧副本时拒绝，并提示先 `undo()`。
+- **联接探测**：预检阶段在「源卷父目录」与「目标目录」各建一个探针联接再删除，
+  实测两个卷是否都支持；exFAT/FAT32 会在预检就被拒绝。
+- **缺失的根跳过**：某个根不存在（全新安装、从未用过缓存）时跳过并在
+  `MigrationReport.warnings` 中说明，不影响另一个根的迁移。
+- **链接/特殊文件即中止**：数据目录内若存在 symlink/junction/fifo，复制阶段直接报错
+  （而非静默跳过——跳过会让后续校验以「文件数不一致」这种难以理解的形式失败）。
+  校验失败发生在切换之前，系统此时未被改动。
 
 ---
 
