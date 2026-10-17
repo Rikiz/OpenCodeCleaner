@@ -240,6 +240,7 @@ process::poll_loop (每 3s)
 | 组件       | Vitest+RTL    | 关键交互（筛选/勾选/向导步骤）（**未落地**）    |
 | E2E        | Playwright    | mock Tauri 后端跑通核心流程（**未落地**）      |
 | 跨平台 CI  | GitHub Actions| `.github/workflows/ci.yml`：ubuntu/macos/windows 跑 clippy + 引擎测试；Linux 额外跑 `tauri build --no-bundle`；前端三平台跑 lint + build |
+| 发布流水线  | GitHub Actions| `.github/workflows/release.yml`：`v*` tag 触发，四 target（macOS arm64/x64 dmg、Windows NSIS+MSI、Linux AppImage+deb）并行构建 → 先建草稿 Release → 全绿后由 `publish` job 公开；tag 与三处版本号不一致则失败 |
 
 测试夹具：`src-tauri/tests/fixtures/seed.sql` 在临时 DB 重建固定数据；
 `src-tauri/tests/engine.rs` 的 fixture 通过 `XDG_DATA_HOME` / `XDG_CACHE_HOME`

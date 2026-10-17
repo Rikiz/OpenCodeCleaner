@@ -1,0 +1,127 @@
+name: Release
+
+# Tag 触发：本地 `git tag v1.0.1 && git push origin v1.0.1` 即出包。
+# workflow_dispatch 用于手动重跑（例如某个平台产物上传失败后补传），
+# 此时用当前 tag（默认分支的 HEAD 版本）作为版本依据。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 正在打包的 Release 不要被后续推送打断：中断会留下半套产物。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # 推 tag 时以 tag 为权威；手动重跑时以应用版本为准（等价于 v<version>）。
+  # __VERSION__ 由 tauri-action 替换成 tauri.conf.json 里的版本号。
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || 'v__VERSION__' }}
+
+jobs:
+  build:
+    name: build (${{ matrix.label }})
+    # 一个平台失败不影响其余平台跑完，便于对照排查。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macos-arm64
+            platform: macos-latest
+            args: --target aarch64-apple-darwin --bundles dmg
+          - label: macos-x64
+            platform: macos-latest
+            args: --target x86_64-apple-darwin --bundles dmg
+          - label: linux
+            platform: ubuntu-22.04
+            args: --bundles appimage,deb
+          - label: windows
+            platform: windows-latest
+            args: --bundles nsis,msi
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # tag 是权威：不一致就直接失败，避免打出「自称 1.0.0 的 v9.9.9」。
+      # 手动重跑时跳过 tag 校验，但仍校验三处版本彼此一致。
+      - name: 校验 tag 与应用版本一致
+        if: github.event_name == 'push'
+        run: node scripts/check-release-version.mjs "$RELEASE_TAG"
+
+      - run: npm ci
+
+      - name: 安装 Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+
+      # macOS 要同时产出 arm64 与 x86_64 两个 dmg，因此两个 target 都要装；
+      # 由同一个 arm64 runner 交叉编译（macos-13 已下线，没有 Intel runner 可用）。
+      - name: 安装 macOS 交叉编译 target
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: 安装 Linux 依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl wget file pkg-config patchelf xdg-utils \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.platform }}-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.platform }}-release-
+
+      # 未签名：macOS 需右键打开或 xattr 去隔离属性；Windows 需在 SmartScreen 里
+      # 点「更多信息 → 仍要运行」。详见 .github/RELEASE_BODY.md。
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: opencode cleaner ${{ env.RELEASE_TAG }}
+          releaseBody: .github/RELEASE_BODY.md
+          # 自动汇总 commit/PR 生成更新日志；releaseBody 会前置在其上方。
+          generateReleaseNotes: true
+          # 先建草稿，等四个平台全部成功再由 publish job 公开。
+          releaseDraft: true
+          prerelease: false
+          # 本项目未接入 Tauri Updater，latest.json 无人消费，不要生成。
+          uploadUpdaterJson: false
+          # 去空格命名，便于脚本化下载：
+          #   opencode-cleaner_1.0.1_aarch64.dmg / _x64-setup.exe / _amd64.deb
+          releaseAssetNamePattern: '[mainBinaryName]_[version]_[arch][setup].[ext]'
+          # 打包与上传偶发失败时重试。
+          retryAttempts: 2
+          args: ${{ matrix.args }}
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # 四个平台全绿才公开，避免出现「Release 里只有 macOS 包」的情况。
+      - name: 将草稿转为正式发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: gh release edit "$TAG" --draft=false

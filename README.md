@@ -1,6 +1,7 @@
 # opencode cleaner
 
 [![CI](https://github.com/Rikiz/OpenCodeCleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/Rikiz/OpenCodeCleaner/actions/workflows/ci.yml)
+[![Release](https://github.com/Rikiz/OpenCodeCleaner/actions/workflows/release.yml/badge.svg)](https://github.com/Rikiz/OpenCodeCleaner/actions/workflows/release.yml)
 
 为 opencode（CLI 与 Desktop）瘦身的跨平台（macOS / Windows / Linux）桌面应用。扫描磁盘占用，安全清理历史会话、日志、快照与缓存。
 
@@ -48,6 +49,35 @@ cargo tauri build    # 产出 .app / .dmg（macOS）、.exe / .msi（Windows）�
 ```
 
 产物位置：`src-tauri/target/release/bundle/`
+
+### 正式发版：打 tag 即出包
+
+`release.yml` 监听 `v*` tag，在四个 target 上构建并挂到同一个 GitHub Release
+（macOS arm64 dmg、macOS x64 dmg、Windows NSIS+MSI、Linux AppImage+deb）。
+四个平台全部构建成功后，草稿才转为正式发布——不会出现「Release 里只有一半平台」的页面。
+
+```bash
+# 1. 同步版本号（必须三处都改）：src-tauri/tauri.conf.json、src-tauri/Cargo.toml、package.json
+# 2. 本地校验（CI 里跑的是同一条）
+npm run release:check && npm run release:check -- v1.0.1
+
+# 3. 提交推送，然后打 tag
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+tag 与三处版本号不一致时 CI 会**直接失败**——否则会打出一个「自称 1.0.0 却挂在
+v9.9.9 下」的包，下载页面上完全看不出问题。
+
+需要补传某个平台产物时，在 Actions 面板对 `Release` 工作流点 *Run workflow*
+手动重跑即可（此时以应用版本而非 tag 为准，注意别用改过版本号的分支跑）。
+
+## 已知限制
+
+- **产物未做代码签名**（没有 Apple Developer ID / Windows 代码签名证书）。
+  macOS 首次打开需右键→「打开」或 `xattr -dr com.apple.quarantine`；
+  Windows 需在 SmartScreen 里点「更多信息 → 仍要运行」。
+- **没有自动更新**。设置页的「自动检查更新」开关目前未接实现（预留项），
+  升级方式是手动下载新版本覆盖安装。
 
 ### 构建前置依赖
 

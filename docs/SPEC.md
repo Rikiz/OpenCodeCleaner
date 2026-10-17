@@ -35,7 +35,6 @@ opencode 重度用户：日均多次交互、多项目并行，使用 macOS 或 
 - 不做 Part 级细粒度删减（如仅删 webfetch HTML、保留对话文本）——列为 v2
 - 不做自动定期清理（计划任务）——列为 v2
 - 不修改 opencode 自身代码或配置
-- 不提供 Linux 安装包（路径逻辑与引擎完全兼容，AppImage/deb 打包列为 v1.1）
 - 不做跨机同步 / 多盘数据分布（仅支持把数据整体搬到另一个本地卷）
 - 不清理 `auth.json`/`account`/`credential` 等凭证（涉密且价值低）
 - 不做会话导出/迁移（opencode 已有 `export`/`import` 命令）
@@ -179,6 +178,19 @@ opencode 重度用户：日均多次交互、多项目并行，使用 macOS 或 
 Linux 无官方安装包，但 `npx tauri build --no-bundle` 可直接产出可执行文件，CI 亦覆盖其编译。
 
 Windows 另提供**数据迁移**能力：把 opencode 数据整体搬到其它本地卷，原路径留 NTFS 目录联接（ADR-010）。
+
+发布产物由 `.github/workflows/release.yml` 在 `v*` tag 上产出：
+
+| 平台 | 产物 |
+| ---- | ---- |
+| macOS Apple Silicon | `.dmg`（universal 策略外的独立 arm64 包） |
+| macOS Intel | `.dmg` |
+| Windows | NSIS `.exe` + WiX `.msi` |
+| Linux | `.AppImage` + `.deb` |
+
+产物**不做代码签名**（无 Apple Developer ID / Windows 代码签名证书），
+首次运行的绕过方式见 README「已知限制」。版本守卫：`scripts/check-release-version.mjs`
+要求 tag 与 `tauri.conf.json` / `Cargo.toml` / `package.json` 三处版本完全一致。
 
 ## 12. Versioning & Compatibility
 
