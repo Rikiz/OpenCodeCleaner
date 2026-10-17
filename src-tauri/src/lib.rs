@@ -12,6 +12,8 @@ pub mod settings;
 pub mod types;
 
 use commands::AppState;
+// Only the devtools block below needs Manager, and that block is debug-only.
+#[cfg(debug_assertions)]
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
