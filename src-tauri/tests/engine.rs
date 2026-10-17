@@ -527,7 +527,8 @@ fn t19_relocate_verify_and_undo_roundtrip() {
     assert!(st.data_relocated);
     assert!(st.cache_relocated);
     assert!(
-        st.data_real_path.starts_with(target_base.to_string_lossy().to_string()),
+        st.data_real_path
+            .starts_with(target_base.to_string_lossy().as_ref()),
         "unexpected real path: {}",
         st.data_real_path
     );

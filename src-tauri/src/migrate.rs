@@ -361,7 +361,7 @@ mod win {
                 }
             })
             .collect();
-        hits.sort_by(|a, b| b.0.cmp(&a.0));
+        hits.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
         hits.into_iter().next().map(|(_, p)| p)
     }
 }
